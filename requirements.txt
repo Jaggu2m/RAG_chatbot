@@ -1,0 +1,14 @@
+langchain
+langchain-community
+langchain-pinecone
+langchain-groq
+fastapi
+uvicorn
+streamlit
+sentence-transformers
+pinecone-client
+pypdf
+unstructured
+pandas
+python-dotenv
+requests
