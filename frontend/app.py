@@ -61,6 +61,16 @@ def fetch_sessions():
         pass
     return []
 
+# ─── Fetch user documents ───────────────────────────────────────────
+def fetch_user_documents():
+    try:
+        response = requests.get("http://localhost:8000/documents", headers=get_auth_headers(), timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return []
+
 # ─── Load a specific chat session ───────────────────────────────────
 def load_session(session_id):
     try:
@@ -120,7 +130,8 @@ if question := st.chat_input("Ask a question about your documents..."):
                     API_URL,
                     json={
                         "session_id": st.session_state.current_session_id,
-                        "question": question
+                        "question": question,
+                        "target_documents": st.session_state.get("target_documents", [])
                     },
                     headers=get_auth_headers(),
                     timeout=30
@@ -181,6 +192,19 @@ with st.sidebar:
     if st.button("🚪 Logout"):
         st.session_state.clear()
         st.rerun()
+
+    st.divider()
+
+    st.header("🎯 Target Documents")
+    user_docs = fetch_user_documents()
+    doc_filenames = [d["filename"] for d in user_docs]
+    
+    st.session_state.target_documents = st.multiselect(
+        "Focus search on (leave blank for all):",
+        options=doc_filenames,
+        default=st.session_state.get("target_documents", []),
+        help="If you select specific files here, Groq will completely ignore all other files."
+    )
 
     st.divider()
 
@@ -249,25 +273,17 @@ with st.sidebar:
     # ─── Manage Documents ────────────────────────────────────────────
     st.header("📂 Manage Documents")
 
-    try:
-        doc_response = requests.get("http://localhost:8000/documents", headers=get_auth_headers(), timeout=5)
-        if doc_response.status_code == 200:
-            docs_list = doc_response.json()
-            if docs_list:
-                for doc in docs_list:
-                    with st.expander(f"📄 {doc['filename']}"):
-                        st.write(f"**Tokens:** ~{doc['tokens']:,}")
-                        st.write(f"**Est. Vector Cost:** ${doc['cost']:.6f}")
-                        if st.button("🗑️ Delete", key=f"del_{doc['filename']}", use_container_width=True):
-                            with st.spinner("Purging vectors..."):
-                                requests.delete(f"http://localhost:8000/documents/{doc['filename']}", headers=get_auth_headers(), timeout=60)
-                                st.rerun()
-            else:
-                st.caption("No documents indexed yet.")
-        else:
-            st.caption("Could not load documents.")
-    except Exception:
-        st.caption("Could not connect to backend to fetch documents.")
+    if user_docs:
+        for doc in user_docs:
+            with st.expander(f"📄 {doc['filename']}"):
+                st.write(f"**Tokens:** ~{doc['tokens']:,}")
+                st.write(f"**Est. Vector Cost:** ${doc['cost']:.6f}")
+                if st.button("🗑️ Delete", key=f"del_{doc['filename']}", use_container_width=True):
+                    with st.spinner("Purging vectors..."):
+                        requests.delete(f"http://localhost:8000/documents/{doc['filename']}", headers=get_auth_headers(), timeout=60)
+                        st.rerun()
+    else:
+        st.caption("No documents indexed yet.")
 
     st.divider()
 

@@ -33,16 +33,29 @@ def ingest_single_file(file_path: str, user_email: str):
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".pdf":
-        parser = LlamaParse(
-            result_type="markdown",
-            api_key=os.getenv("LLAMA_CLOUD_API_KEY")
-        )
-        # LlamaParse returns LlamaIndex documents. We convert them to LangChain format docs.
-        llama_docs = parser.load_data(file_path)
-        
-        # Convert to LangChain Document format and attach the user identifier
         from langchain_core.documents import Document
-        docs = [Document(page_content=doc.text, metadata={"source": file_path, "user": user_email}) for doc in llama_docs]
+        docs = []
+        try:
+            parser = LlamaParse(
+                result_type="markdown",
+                api_key=os.getenv("LLAMA_CLOUD_API_KEY")
+            )
+            # LlamaParse returns LlamaIndex documents. We convert them to LangChain format docs.
+            llama_docs = parser.load_data(file_path)
+            
+            # Convert to LangChain Document format and attach the user identifier
+            docs = [Document(page_content=doc.text, metadata={"source": file_path, "user": user_email}) for doc in llama_docs]
+        except Exception as e:
+            print(f"LlamaParse error: {e}. Falling back to local PyPDFLoader...")
+            
+        # Fallback to pure local PDF extraction if LlamaParse hits Free Tier limit
+        if not docs:
+            print("Initiating PyPDFLoader Fallback Mode...")
+            from langchain_community.document_loaders import PyPDFLoader
+            loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            for doc in docs:
+                doc.metadata["user"] = user_email
 
     elif ext in [".txt", ".md"]:
         docs = TextLoader(file_path, autodetect_encoding=True).load()

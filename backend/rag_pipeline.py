@@ -38,27 +38,37 @@ print("Loading Re-ranker model...")
 ranker = Ranker(cache_dir=".")
 
 # ─── Step 3: Set up retriever as a function (refreshes on each call) ─
-def get_retriever(user_email: str):
+def get_retriever(user_email: str, target_documents: list = None):
     """
     Returns a fresh retriever every time.
     We fetch 10 documents directly from Pinecone. The Re-ranker will filter these down to 3.
     Critically, we apply a strict metadata filter so users can ONLY retrieve their own uploaded files.
     """
+    filter_dict = {"user": user_email}
+    
+    # Mathematical document exclusion: If target files are provided, ignore the rest
+    if target_documents:
+        sources = [os.path.join("docs", user_email, doc) for doc in target_documents]
+        filter_dict["source"] = {"$in": sources}
+        
     return vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 10, "filter": {"user": user_email}}
+        search_kwargs={"k": 15, "filter": filter_dict}
     )
 
 # ─── Step 4: Prompt template ────────────────────────────────────────
 prompt = PromptTemplate.from_template("""
-You are a helpful assistant that answers questions based ONLY on the
-context provided below.
+You are a highly analytical expert assistant that answers questions based ONLY on the 
+context provided below. You are excellent at understanding complex topics.
 
 If the answer is not found in the context, say exactly:
 "I don't have information about that in the knowledge base."
 
-Always mention which document or source your answer comes from.
-Keep your answer clear and concise.
+Your instructions for answering:
+1. Provide highly detailed, comprehensive explanations.
+2. Form your reply into clearly readable paragraphs, and use bullet points when explaining lists or multiple steps.
+3. If the user asks for a detailed explanation, thoroughly unpack and explain all the relevant concepts found in the context. Do not be overly brief.
+4. Always cite precisely which document or source file your answer comes from.
 
 Context:
 {context}
@@ -75,7 +85,7 @@ llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model_name="llama-3.3-70b-versatile",
     temperature=0.2,
-    max_tokens=1024,
+    max_tokens=2048,
 )
 
 # ─── Step 6: Helper to format retrieved docs ────────────────────────
@@ -85,14 +95,14 @@ def format_docs(docs):
 print("RAG pipeline ready\n")
 
 # ─── Step 7: Main function called by FastAPI ────────────────────────
-def ask_question(question: str, user_email: str, chat_history: list = None) -> dict:
+def ask_question(question: str, user_email: str, target_documents: list = None, chat_history: list = None) -> dict:
     if not question.strip():
         return {
             "answer": "Please ask a valid question.",
             "sources": []
         }
 
-    retriever = get_retriever(user_email)
+    retriever = get_retriever(user_email, target_documents)
     
     # Get top 10 rough documents from Pinecone
     rough_docs = retriever.invoke(question)
@@ -107,8 +117,8 @@ def ask_question(question: str, user_email: str, chat_history: list = None) -> d
         rerankrequest = RerankRequest(query=question, passages=passages)
         results = ranker.rerank(rerankrequest)
         
-        # Take the top 3 purely contextual results
-        top_results = results[:3]
+        # Take the top 7 highly contextual results to maximize detail
+        top_results = results[:7]
         
         for p in top_results:
             source_docs.append(Document(page_content=p["text"], metadata=p.get("meta", {})))

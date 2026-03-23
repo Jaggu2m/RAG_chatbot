@@ -77,7 +77,8 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 @app.get("/auth/login")
 async def login(request: Request):
     redirect_uri = "http://localhost:8000/auth/callback"
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    # Force Google to show the account selection screen every time
+    return await oauth.google.authorize_redirect(request, redirect_uri, prompt="select_account")
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
@@ -106,6 +107,7 @@ async def auth_callback(request: Request):
 class QuestionRequest(BaseModel):
     session_id: str
     question: str
+    target_documents: list[str] = []
 
 class SourceModel(BaseModel):
     file: str
@@ -146,8 +148,8 @@ def chat(request: QuestionRequest, user_email: str = Depends(verify_token)):
             if session_doc and "messages" in session_doc:
                 chat_history = session_doc["messages"]
 
-        # Run pipeline (pass user_email to filter pinecone vectors)
-        result = ask_question(request.question, user_email, chat_history)
+        # Run pipeline (pass user_email to filter pinecone vectors, and scope targeted files)
+        result = ask_question(request.question, user_email, request.target_documents, chat_history)
 
         # Save the new messages to DB
         if chats_collection is not None:
