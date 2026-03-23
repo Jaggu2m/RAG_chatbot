@@ -25,7 +25,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 INDEX_NAME       = os.getenv("PINECONE_INDEX")
 
 # ─── Single file ingestion (safe to import by FastAPI) ───────────────
-def ingest_single_file(file_path: str):
+def ingest_single_file(file_path: str, user_email: str):
     """
     Ingests a single file into Pinecone.
     Called by FastAPI when a user uploads a document from the UI.
@@ -40,14 +40,18 @@ def ingest_single_file(file_path: str):
         # LlamaParse returns LlamaIndex documents. We convert them to LangChain format docs.
         llama_docs = parser.load_data(file_path)
         
-        # Convert to LangChain Document format
+        # Convert to LangChain Document format and attach the user identifier
         from langchain_core.documents import Document
-        docs = [Document(page_content=doc.text, metadata={"source": file_path}) for doc in llama_docs]
+        docs = [Document(page_content=doc.text, metadata={"source": file_path, "user": user_email}) for doc in llama_docs]
 
     elif ext in [".txt", ".md"]:
         docs = TextLoader(file_path, autodetect_encoding=True).load()
+        for doc in docs:
+            doc.metadata["user"] = user_email
     elif ext == ".csv":
         docs = CSVLoader(file_path).load()
+        for doc in docs:
+            doc.metadata["user"] = user_email
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 

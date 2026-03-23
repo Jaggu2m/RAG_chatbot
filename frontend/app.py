@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 import uuid
+import jwt
 
 # ─── Config ─────────────────────────────────────────────────────────
 API_URL = "http://localhost:8000/chat"
@@ -14,6 +15,37 @@ st.set_page_config(
     layout="centered"
 )
 
+# ─── Auth Parsing ───────────────────────────────────────────────────
+if "token" in st.query_params:
+    st.session_state.token = st.query_params.get("token")
+    st.query_params.clear()
+
+if "token" not in st.session_state:
+    st.title("🔐 RAG Knowledge Base")
+    st.markdown("Please log in with your Google account to access your private chatbot and isolated documents.")
+    st.markdown(
+        f'<a href="http://localhost:8000/auth/login" target="_self">'
+        f'<button style="background-color:#4285F4;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;font-weight:bold;">'
+        f'Sign in with Google'
+        f'</button></a>',
+        unsafe_allow_html=True
+    )
+    st.stop()
+
+# Parse token (we don't verify signature here since backend does it, we just trust it to extract email)
+try:
+    payload = jwt.decode(st.session_state.token, options={"verify_signature": False})
+    user_email = payload.get("sub", "Unknown User")
+except Exception:
+    st.error("Session expired or invalid token. Please log in again.")
+    if "token" in st.session_state:
+        del st.session_state.token
+    st.stop()
+
+# Helper for authenticated requests
+def get_auth_headers():
+    return {"Authorization": f"Bearer {st.session_state.token}"}
+
 # ─── Header ─────────────────────────────────────────────────────────
 st.title("🤖 RAG Knowledge Chatbot")
 st.caption("Answers grounded in your documents — powered by Groq + Pinecone")
@@ -22,7 +54,7 @@ st.divider()
 # ─── Fetch chat sessions from backend ───────────────────────────────
 def fetch_sessions():
     try:
-        response = requests.get(SESSIONS_URL, timeout=5)
+        response = requests.get(SESSIONS_URL, headers=get_auth_headers(), timeout=5)
         if response.status_code == 200:
             return response.json()
     except Exception:
@@ -32,7 +64,7 @@ def fetch_sessions():
 # ─── Load a specific chat session ───────────────────────────────────
 def load_session(session_id):
     try:
-        response = requests.get(CHAT_HISTORY_URL.format(session_id=session_id), timeout=5)
+        response = requests.get(CHAT_HISTORY_URL.format(session_id=session_id), headers=get_auth_headers(), timeout=5)
         if response.status_code == 200:
             st.session_state.messages = response.json().get("messages", [])
             st.session_state.current_session_id = session_id
@@ -90,6 +122,7 @@ if question := st.chat_input("Ask a question about your documents..."):
                         "session_id": st.session_state.current_session_id,
                         "question": question
                     },
+                    headers=get_auth_headers(),
                     timeout=30
                 )
 
@@ -144,6 +177,13 @@ if question := st.chat_input("Ask a question about your documents..."):
 
 # ─── Sidebar ────────────────────────────────────────────────────────
 with st.sidebar:
+    st.caption(f"👤 Logged in as: **{user_email}**")
+    if st.button("🚪 Logout"):
+        st.session_state.clear()
+        st.rerun()
+
+    st.divider()
+
     st.header("💬 Chat Sessions")
     
     if st.button("➕ New Chat", use_container_width=True):
@@ -190,6 +230,7 @@ with st.sidebar:
                             uploaded_file.getvalue(),
                             uploaded_file.type
                         )},
+                        headers=get_auth_headers(),
                         timeout=300  # 5 minutes specifically for large documents
                     )
 
@@ -209,7 +250,7 @@ with st.sidebar:
     st.header("📂 Manage Documents")
 
     try:
-        doc_response = requests.get("http://localhost:8000/documents", timeout=5)
+        doc_response = requests.get("http://localhost:8000/documents", headers=get_auth_headers(), timeout=5)
         if doc_response.status_code == 200:
             docs_list = doc_response.json()
             if docs_list:
@@ -219,7 +260,7 @@ with st.sidebar:
                         st.write(f"**Est. Vector Cost:** ${doc['cost']:.6f}")
                         if st.button("🗑️ Delete", key=f"del_{doc['filename']}", use_container_width=True):
                             with st.spinner("Purging vectors..."):
-                                requests.delete(f"http://localhost:8000/documents/{doc['filename']}", timeout=60)
+                                requests.delete(f"http://localhost:8000/documents/{doc['filename']}", headers=get_auth_headers(), timeout=60)
                                 st.rerun()
             else:
                 st.caption("No documents indexed yet.")

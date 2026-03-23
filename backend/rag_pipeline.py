@@ -38,14 +38,15 @@ print("Loading Re-ranker model...")
 ranker = Ranker(cache_dir=".")
 
 # ─── Step 3: Set up retriever as a function (refreshes on each call) ─
-def get_retriever():
+def get_retriever(user_email: str):
     """
     Returns a fresh retriever every time.
     We fetch 10 documents directly from Pinecone. The Re-ranker will filter these down to 3.
+    Critically, we apply a strict metadata filter so users can ONLY retrieve their own uploaded files.
     """
     return vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 10}
+        search_kwargs={"k": 10, "filter": {"user": user_email}}
     )
 
 # ─── Step 4: Prompt template ────────────────────────────────────────
@@ -84,14 +85,14 @@ def format_docs(docs):
 print("RAG pipeline ready\n")
 
 # ─── Step 7: Main function called by FastAPI ────────────────────────
-def ask_question(question: str, chat_history: list = None) -> dict:
+def ask_question(question: str, user_email: str, chat_history: list = None) -> dict:
     if not question.strip():
         return {
             "answer": "Please ask a valid question.",
             "sources": []
         }
 
-    retriever = get_retriever()
+    retriever = get_retriever(user_email)
     
     # Get top 10 rough documents from Pinecone
     rough_docs = retriever.invoke(question)
