@@ -1,9 +1,12 @@
 import streamlit as st
 import requests
 import os
+import uuid
 
 # ─── Config ─────────────────────────────────────────────────────────
 API_URL = "http://localhost:8000/chat"
+SESSIONS_URL = "http://localhost:8000/sessions"
+CHAT_HISTORY_URL = "http://localhost:8000/chat/{session_id}"
 
 st.set_page_config(
     page_title="RAG Knowledge Chatbot",
@@ -16,13 +19,39 @@ st.title("🤖 RAG Knowledge Chatbot")
 st.caption("Answers grounded in your documents — powered by Groq + Pinecone")
 st.divider()
 
+# ─── Fetch chat sessions from backend ───────────────────────────────
+def fetch_sessions():
+    try:
+        response = requests.get(SESSIONS_URL, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return []
+
+# ─── Load a specific chat session ───────────────────────────────────
+def load_session(session_id):
+    try:
+        response = requests.get(CHAT_HISTORY_URL.format(session_id=session_id), timeout=5)
+        if response.status_code == 200:
+            st.session_state.messages = response.json().get("messages", [])
+            st.session_state.current_session_id = session_id
+    except Exception as e:
+        st.error(f"Failed to load chat history: {e}")
+
 # ─── Initialize chat history in session state ───────────────────────
-# session_state persists data across reruns in Streamlit
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = str(uuid.uuid4())
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "sources" not in st.session_state:
     st.session_state.sources = {}
+
+# If messages are empty but a session is active, try fetching
+if not st.session_state.messages and st.session_state.current_session_id:
+    load_session(st.session_state.current_session_id)
 
 # ─── Display existing chat history ──────────────────────────────────
 for i, message in enumerate(st.session_state.messages):
@@ -55,14 +84,11 @@ if question := st.chat_input("Ask a question about your documents..."):
     with st.chat_message("assistant"):
         with st.spinner("Searching knowledge base..."):
             try:
-                # Send the entire history (excluding the current question which we just appended)
-                history_to_send = st.session_state.messages[:-1]
-                
                 response = requests.post(
                     API_URL,
                     json={
-                        "question": question,
-                        "chat_history": history_to_send
+                        "session_id": st.session_state.current_session_id,
+                        "question": question
                     },
                     timeout=30
                 )
@@ -118,18 +144,28 @@ if question := st.chat_input("Ask a question about your documents..."):
 
 # ─── Sidebar ────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("About")
-    st.markdown("""
-    This chatbot answers questions using **Retrieval Augmented Generation (RAG)**.
-
-    **Stack:**
-    - 🔍 Pinecone — vector search
-    - 🧠 all-MiniLM-L6-v2 — embeddings
-    - ⚡ Groq — LLM inference
-    - 🔗 LangChain — RAG pipeline
-    - 🚀 FastAPI — backend API
-    - 🎈 Streamlit — this UI
-    """)
+    st.header("💬 Chat Sessions")
+    
+    if st.button("➕ New Chat", use_container_width=True):
+        st.session_state.current_session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.session_state.sources = {}
+        st.rerun()
+        
+    sessions = fetch_sessions()
+    if sessions:
+        st.markdown("**Previous Conversations:**")
+        for session in sessions:
+            # Highlight current session
+            btn_label = f"🟢 {session['title']}" if session['session_id'] == st.session_state.current_session_id else f"📄 {session['title']}"
+            if st.button(btn_label, key=f"session_{session['session_id']}", use_container_width=True):
+                st.session_state.current_session_id = session['session_id']
+                st.session_state.messages = []
+                st.session_state.sources = {}
+                load_session(session['session_id'])
+                st.rerun()
+    else:
+        st.caption("No previous chats found.")
 
     st.divider()
 
@@ -187,7 +223,7 @@ with st.sidebar:
     st.divider()
 
     # ─── Clear chat button ───────────────────────────────────────────
-    if st.button("🗑 Clear chat history"):
+    if st.button("🗑 Clear current chat screen"):
         st.session_state.messages = []
         st.session_state.sources = {}
         st.rerun()
