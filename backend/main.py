@@ -151,6 +151,46 @@ def get_chat_history(session_id: str):
     return {"messages": doc.get("messages", [])}
 
 
+@app.get("/documents")
+def list_documents():
+    """Lists all uploaded documents, estimating their token count and cost."""
+    docs_list = []
+    if os.path.exists("docs"):
+        for filename in os.listdir("docs"):
+            filepath = os.path.join("docs", filename)
+            if os.path.isfile(filepath):
+                size = os.path.getsize(filepath)
+                # rough token estimation: 1 byte ~ 1 char. 4 chars ~ 1 token.
+                tokens = size // 4
+                cost = (tokens / 1000000) * 0.10 # Base $0.10 / 1M token estimate
+                docs_list.append({
+                    "filename": filename,
+                    "tokens": tokens,
+                    "cost": round(cost, 6)
+                })
+    return docs_list
+
+@app.delete("/documents/{filename}")
+def delete_document(filename: str):
+    """Deletes a document from the local folder and purges its Pinecone vectors."""
+    filepath = os.path.join("docs", filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found in local /docs folder")
+        
+    try:
+        from pinecone import Pinecone
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        index = pc.Index(os.getenv("PINECONE_INDEX"))
+        # Our embedding metadata always stores "source": "docs/filename.ext" or similar filepath
+        index.delete(filter={"source": filepath})
+        print(f"Successfully purged Pinecone vectors for {filepath}")
+    except Exception as e:
+        print(f"Failed to delete vectors from Pinecone: {e}")
+        
+    os.remove(filepath)
+    return {"status": "success", "message": f"Deleted {filename}"}
+
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     """

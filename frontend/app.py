@@ -205,20 +205,28 @@ with st.sidebar:
                 except requests.exceptions.Timeout:
                     st.error("Upload timed out. Try a smaller file.")
 
-    st.divider()
-
-    # ─── Indexed documents list ──────────────────────────────────────
-    st.header("Indexed documents")
+    # ─── Manage Documents ────────────────────────────────────────────
+    st.header("📂 Manage Documents")
 
     try:
-        docs_list = os.listdir("docs")
-        if docs_list:
-            for doc in docs_list:
-                st.caption(f"📄 {doc}")
+        doc_response = requests.get("http://localhost:8000/documents", timeout=5)
+        if doc_response.status_code == 200:
+            docs_list = doc_response.json()
+            if docs_list:
+                for doc in docs_list:
+                    with st.expander(f"📄 {doc['filename']}"):
+                        st.write(f"**Tokens:** ~{doc['tokens']:,}")
+                        st.write(f"**Est. Vector Cost:** ${doc['cost']:.6f}")
+                        if st.button("🗑️ Delete", key=f"del_{doc['filename']}", use_container_width=True):
+                            with st.spinner("Purging vectors..."):
+                                requests.delete(f"http://localhost:8000/documents/{doc['filename']}", timeout=60)
+                                st.rerun()
+            else:
+                st.caption("No documents indexed yet.")
         else:
-            st.caption("No documents indexed yet.")
+            st.caption("Could not load documents.")
     except Exception:
-        st.caption("Could not read docs folder.")
+        st.caption("Could not connect to backend to fetch documents.")
 
     st.divider()
 
