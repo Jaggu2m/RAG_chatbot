@@ -7,6 +7,8 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from flashrank import Ranker, RerankRequest
 
 # ─── Load environment variables ─────────────────────────────────────
 load_dotenv()
@@ -30,15 +32,20 @@ vectorstore = PineconeVectorStore(
     pinecone_api_key=PINECONE_API_KEY
 )
 
+# ─── Load Re-ranker ─────────────────────────────────────────────────
+print("Loading Re-ranker model...")
+# Using lightweight default cross-encoder for re-ranking
+ranker = Ranker(cache_dir=".")
+
 # ─── Step 3: Set up retriever as a function (refreshes on each call) ─
 def get_retriever():
     """
     Returns a fresh retriever every time.
-    This ensures newly uploaded documents are always included.
+    We fetch 10 documents directly from Pinecone. The Re-ranker will filter these down to 3.
     """
     return vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 3}
+        search_kwargs={"k": 10}
     )
 
 # ─── Step 4: Prompt template ────────────────────────────────────────
@@ -84,25 +91,33 @@ def ask_question(question: str, chat_history: list = None) -> dict:
             "sources": []
         }
 
-    # Get a fresh retriever every call — picks up newly uploaded docs
     retriever = get_retriever()
-
-    # Build chain fresh each time
-    rag_chain = (
-        {
-            "context": retriever | format_docs,
-            "question": RunnablePassthrough()
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    # Get source documents
-    source_docs = retriever.invoke(question)
-
-    # Run chain
-    answer = rag_chain.invoke(question)
+    
+    # Get top 10 rough documents from Pinecone
+    rough_docs = retriever.invoke(question)
+    
+    # Apply FlashRank Cross-Encoder Re-ranking
+    source_docs = []
+    if rough_docs:
+        passages = [
+            {"id": i, "text": doc.page_content, "meta": doc.metadata}
+            for i, doc in enumerate(rough_docs)
+        ]
+        rerankrequest = RerankRequest(query=question, passages=passages)
+        results = ranker.rerank(rerankrequest)
+        
+        # Take the top 3 purely contextual results
+        top_results = results[:3]
+        
+        for p in top_results:
+            source_docs.append(Document(page_content=p["text"], metadata=p.get("meta", {})))
+    
+    # Manually invoke the LLM with the highly contextual top 3 results
+    context_text = format_docs(source_docs)
+    prompt_value = prompt.format(context=context_text, question=question)
+    
+    response = llm.invoke(prompt_value)
+    answer = response.content
 
     # Extract sources
     sources = []

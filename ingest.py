@@ -3,10 +3,16 @@ import glob
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders import (
-    PyPDFLoader,
     TextLoader,
     CSVLoader
 )
+from llama_parse import LlamaParse
+import nest_asyncio
+import tempfile
+
+# Apply nest_asyncio globally so LlamaParse can run in FastAPI's async event loop
+nest_asyncio.apply()
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
@@ -27,7 +33,17 @@ def ingest_single_file(file_path: str):
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".pdf":
-        docs = PyPDFLoader(file_path).load()
+        parser = LlamaParse(
+            result_type="markdown",
+            api_key=os.getenv("LLAMA_CLOUD_API_KEY")
+        )
+        # LlamaParse returns LlamaIndex documents. We convert them to LangChain format docs.
+        llama_docs = parser.load_data(file_path)
+        
+        # Convert to LangChain Document format
+        from langchain_core.documents import Document
+        docs = [Document(page_content=doc.text, metadata={"source": file_path}) for doc in llama_docs]
+
     elif ext in [".txt", ".md"]:
         docs = TextLoader(file_path, autodetect_encoding=True).load()
     elif ext == ".csv":
@@ -64,10 +80,17 @@ if __name__ == "__main__":
     print("\n Loading documents...")
     docs = []
 
-    # Load PDFs
+    # Load PDFs using LlamaParse
+    parser = LlamaParse(
+        result_type="markdown",
+        api_key=os.getenv("LLAMA_CLOUD_API_KEY")
+    )
+    
     for path in glob.glob("docs/**/*.pdf", recursive=True):
         print(f"  PDF: {path}")
-        docs += PyPDFLoader(path).load()
+        llama_docs = parser.load_data(path)
+        from langchain_core.documents import Document
+        docs += [Document(page_content=doc.text, metadata={"source": path}) for doc in llama_docs]
 
     # Load plain text and markdown
     for path in glob.glob("docs/**/*.txt", recursive=True):
